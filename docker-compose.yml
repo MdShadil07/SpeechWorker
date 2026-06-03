@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  speech-worker:
+    build: .
+    environment:
+      WHISPER_MODEL: small.en
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      LOG_LEVEL: INFO
+    volumes:
+      - ../../uploads:/app/uploads:ro  # Mount uploads directory read-only
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health', timeout=5).status == 200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
