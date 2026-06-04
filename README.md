@@ -1,4 +1,3 @@
-# SpeechWorker
 # Speech Transcription Worker
 
 FastAPI-based speech-to-text transcription service using faster-whisper for the English Learning Platform.

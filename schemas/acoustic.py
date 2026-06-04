@@ -24,6 +24,9 @@ class AcousticPhoneFeatures(BaseModel):
     spectralCentroid: float
     spectralBandwidth: float
     mfccMean: List[float]
+    pitchMean: float
+    pitchMax: float
+    pitchSlope: float
     confidence: float
 
 

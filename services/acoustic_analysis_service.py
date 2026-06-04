@@ -64,6 +64,37 @@ class AcousticAnalysisService:
         mfcc = librosa.feature.mfcc(y=segment, sr=sr, n_mfcc=13)
         mfcc_mean = [float(value) for value in np.mean(mfcc, axis=1)]
 
+        # Extract pitch (F0) using pyin
+        pitch_mean = 0.0
+        pitch_max = 0.0
+        pitch_slope = 0.0
+        
+        try:
+            # librosa.pyin requires the signal to be at least as long as frame_length.
+            # Default frame_length is 2048. For very short phonemes, this fails.
+            frame_length = min(2048, max(256, len(segment) - (len(segment) % 2)))
+            if len(segment) >= 256:
+                f0, voiced_flag, _ = librosa.pyin(
+                    segment,
+                    fmin=librosa.note_to_hz('C2'),
+                    fmax=librosa.note_to_hz('C7'),
+                    sr=sr,
+                    frame_length=frame_length,
+                    fill_na=None
+                )
+                valid_f0 = f0[voiced_flag] if f0 is not None and voiced_flag is not None else []
+                pitch_mean = float(np.mean(valid_f0)) if len(valid_f0) > 0 else 0.0
+                pitch_max = float(np.max(valid_f0)) if len(valid_f0) > 0 else 0.0
+                
+                # Calculate slope if we have enough points
+                if len(valid_f0) > 1:
+                    x = np.arange(len(valid_f0))
+                    slope, _ = np.polyfit(x, valid_f0, 1)
+                    pitch_slope = float(slope)
+        except Exception as e:
+            # If pitch extraction fails (usually due to length), we just leave pitches at 0.0
+            pass
+
         confidence = self._estimate_segment_confidence(
             duration_ms=duration_ms,
             rms_db=rms_db,
@@ -80,6 +111,9 @@ class AcousticAnalysisService:
             spectralCentroid=round(spectral_centroid, 3),
             spectralBandwidth=round(spectral_bandwidth, 3),
             mfccMean=[round(value, 4) for value in mfcc_mean],
+            pitchMean=round(pitch_mean, 3),
+            pitchMax=round(pitch_max, 3),
+            pitchSlope=round(pitch_slope, 3),
             confidence=confidence,
         )
 
