@@ -1,5 +1,7 @@
 import structlog
 import time
+import psutil
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -8,6 +10,7 @@ from services.transcription_service import TranscriptionService
 from services.acoustic_analysis_service import AcousticAnalysisService
 from schemas.acoustic import AcousticAnalysisRequest, AcousticAnalysisResponse
 from schemas.transcription import TranscriptionRequest, TranscriptionResponse, HealthResponse
+from services.semantic_service import SemanticService, SemanticRequest, SemanticResponse
 
 # Configure structured logging
 structlog.configure(
@@ -33,19 +36,24 @@ logger = structlog.get_logger()
 # Global service instance
 transcription_service = None
 acoustic_analysis_service = None
+semantic_service = None
 request_metrics = {
     "requests": 0,
     "errors": 0,
     "totalLatencyMs": 0,
+    "active_jobs": 0,
+    "completed_jobs": 0,
+    "failed_jobs": 0,
 }
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global transcription_service, acoustic_analysis_service
+    global transcription_service, acoustic_analysis_service, semantic_service
     # Startup
     logger.info("Starting speech worker")
     transcription_service = TranscriptionService()
     acoustic_analysis_service = AcousticAnalysisService()
+    semantic_service = SemanticService()
     yield
     # Shutdown
     logger.info("Shutting down speech worker")
@@ -58,9 +66,10 @@ app = FastAPI(
 )
 
 # CORS middleware
+origins = [origin.strip() for origin in config.ALLOWED_ORIGINS.split(',')] if config.ALLOWED_ORIGINS else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -124,6 +133,13 @@ async def health_check():
 @app.get("/metrics")
 async def metrics():
     """Request telemetry for the worker"""
+    proc = psutil.Process(os.getpid())
+    mem_info = proc.memory_info()
+    cpu_percent = proc.cpu_percent()
+    
+    total_jobs = request_metrics["completed_jobs"] + request_metrics["failed_jobs"]
+    avg_processing_time = (request_metrics["totalLatencyMs"] / total_jobs) if total_jobs > 0 else 0
+    
     return {
         "success": True,
         "data": {
@@ -131,6 +147,14 @@ async def metrics():
                 "requests": request_metrics["requests"],
                 "errors": request_metrics["errors"],
                 "totalLatencyMs": request_metrics["totalLatencyMs"],
+                "active_jobs": request_metrics["active_jobs"],
+                "completed_jobs": request_metrics["completed_jobs"],
+                "failed_jobs": request_metrics["failed_jobs"],
+                "avg_processing_time_ms": int(avg_processing_time),
+                "cpu_percent": cpu_percent,
+                "memory_mb": int(mem_info.rss / 1024 / 1024),
+                "model_name": config.WHISPER_MODEL if transcription_service and transcription_service.model else "None",
+                "device": config.WHISPER_DEVICE
             }
         },
     }
@@ -138,33 +162,65 @@ async def metrics():
 @app.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe_audio(request: TranscriptionRequest):
     """Transcribe audio file"""
+    request_metrics["active_jobs"] += 1
     try:
         if not transcription_service:
             raise HTTPException(status_code=503, detail="Transcription service not available")
 
         result = await transcription_service.transcribe(request.audioPath)
+        request_metrics["completed_jobs"] += 1
         return result
 
     except FileNotFoundError:
+        request_metrics["failed_jobs"] += 1
         logger.error("Audio file not found", audio_path=request.audioPath)
         raise HTTPException(status_code=404, detail="Audio file not found")
     except Exception as e:
+        request_metrics["failed_jobs"] += 1
         logger.error("Transcription failed", error=str(e), audio_path=request.audioPath)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+    finally:
+        request_metrics["active_jobs"] -= 1
 
 @app.post("/acoustic/phonemes", response_model=AcousticAnalysisResponse)
 async def analyze_phoneme_acoustics(request: AcousticAnalysisRequest):
     """Extract acoustic features for externally aligned phoneme intervals."""
+    request_metrics["active_jobs"] += 1
     try:
         if not acoustic_analysis_service:
             raise HTTPException(status_code=503, detail="Acoustic analysis service not available")
 
-        return await acoustic_analysis_service.analyze(request)
+        result = await acoustic_analysis_service.analyze(request)
+        request_metrics["completed_jobs"] += 1
+        return result
 
     except FileNotFoundError:
+        request_metrics["failed_jobs"] += 1
         logger.error("Audio file not found for acoustic analysis", audio_path=request.audioPath)
         raise HTTPException(status_code=404, detail="Audio file not found")
     except Exception as e:
+        request_metrics["failed_jobs"] += 1
         logger.error("Acoustic analysis failed", error=str(e), audio_path=request.audioPath)
         raise HTTPException(status_code=500, detail=f"Acoustic analysis failed: {str(e)}")
+    finally:
+        request_metrics["active_jobs"] -= 1
 
+
+@app.post('/semantic/similarity', response_model=SemanticResponse)
+async def semantic_similarity(request: SemanticRequest):
+    """Compute semantic similarity between two texts"""
+    request_metrics['active_jobs'] += 1
+    try:
+        if not semantic_service:
+            raise HTTPException(status_code=503, detail='Semantic service not available')
+
+        result = await semantic_service.compute_similarity(request.text1, request.text2)
+        request_metrics['completed_jobs'] += 1
+        return result
+
+    except Exception as e:
+        request_metrics['failed_jobs'] += 1
+        logger.error('Semantic similarity failed', error=str(e))
+        raise HTTPException(status_code=500, detail=f'Semantic similarity failed: {str(e)}')
+    finally:
+        request_metrics['active_jobs'] -= 1

@@ -8,11 +8,11 @@ Write-Host ""
 
 # Set memory optimization environment variables
 Write-Host "Setting memory optimization environment variables..."
-$env:OMP_NUM_THREADS = "1"
-$env:MKL_NUM_THREADS = "1"
-$env:NUMEXPR_NUM_THREADS = "1"
+$env:OMP_NUM_THREADS = "2"
+$env:MKL_NUM_THREADS = "2"
+$env:NUMEXPR_NUM_THREADS = "2"
 $env:MKL_THREADING_LAYER = "GNU"
-$env:NUMEXPR_MAX_THREADS = "1"
+$env:NUMEXPR_MAX_THREADS = "2"
 
 # Optional: Override Whisper model if needed
 # $env:WHISPER_MODEL = "tiny.en"

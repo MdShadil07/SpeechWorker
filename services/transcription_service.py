@@ -1,20 +1,26 @@
 import time
+# pyrefly: ignore [missing-import]
 import structlog
+# pyrefly: ignore [missing-import]
 import psutil
 import os
+# pyrefly: ignore [missing-import]
 import imageio_ffmpeg
+# pyrefly: ignore [missing-import]
 import numpy as np
+# pyrefly: ignore [missing-import]
 import librosa
+# pyrefly: ignore [missing-import]
 from faster_whisper import WhisperModel
 from app.config import config
 from schemas.transcription import TranscriptionResponse, Segment, Word
 
-# Optimize memory allocation - disable MKL threading and memory fragmentation issues
-os.environ['OMP_NUM_THREADS'] = '1'  # Disable OpenMP threading
-os.environ['MKL_NUM_THREADS'] = '1'  # Disable MKL threading
-os.environ['NUMEXPR_NUM_THREADS'] = '1'  # Disable NumExpr threading
+# Optimize for AWS m7i-flex.large (2 vCPUs, 8GB RAM)
+os.environ['OMP_NUM_THREADS'] = '2'  # Utilize both vCPUs for OpenMP
+os.environ['MKL_NUM_THREADS'] = '2'  # Utilize both vCPUs for MKL
+os.environ['NUMEXPR_NUM_THREADS'] = '2'  # Utilize both vCPUs for NumExpr
 os.environ['MKL_THREADING_LAYER'] = 'GNU'  # Use GNU threading instead of MKL
-os.environ['NUMEXPR_MAX_THREADS'] = '1'  # Single-threaded NumExpr
+os.environ['NUMEXPR_MAX_THREADS'] = '2'  # Max threads for NumExpr
 
 logger = structlog.get_logger()
 
@@ -119,8 +125,8 @@ class TranscriptionService:
                     model_name,
                     device=config.WHISPER_DEVICE,
                     compute_type=compute_type,
-                    cpu_threads=1,  # Use single thread to avoid memory fragmentation
-                    num_workers=1   # Single worker process
+                    cpu_threads=2,  # Leverage both vCPUs on m7i-flex.large
+                    num_workers=1   # Keep 1 worker to avoid memory duplication
                 )
                 
                 load_time = time.time() - start_time
@@ -205,22 +211,24 @@ class TranscriptionService:
             logger.info(
                 "⏳ Stage 2: Running Whisper transcription model...",
                 model_config={
-                    "beam_size": 10,
-                    "patience": 1.5,
-                    "compression_ratio_threshold": 2.8,
+                    "beam_size": 5,
+                    "patience": 1.0,
+                    "compression_ratio_threshold": 2.4,
                     "no_speech_threshold": 0.4,
-                    "condition_on_previous_text": True,
+                    "condition_on_previous_text": False,
+                    "vad_filter": True
                 }
             )
 
             segments, info = self.model.transcribe(
                 audio_path,
                 language="en",
-                beam_size=10,
-                patience=1.5,
-                compression_ratio_threshold=2.8,
+                beam_size=5,
+                patience=1.0,
+                compression_ratio_threshold=2.4,
                 no_speech_threshold=0.4,
-                condition_on_previous_text=True,
+                condition_on_previous_text=False,
+                vad_filter=True,
                 without_timestamps=False,
                 word_timestamps=True,
             )
